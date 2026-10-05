@@ -292,12 +292,144 @@ if tickers:
         # Overzichtstabel opbouwen
         table_data = []
         for ticker, res in scan_results.items():
-            table_data.append({
-                "Ticker": ticker,
-                "Koers ($)": f"${res['Koers']:.2f}",
-                "AI Score": res["AI Score"],
-                "Sentiment": res["Sentiment"],
-                "Short-Term Rating": res["Short-Term Rating"],
-                "Mid-Term Rating": res["Mid-Term Rating"],
-                "RSI (14)": res["RSI (14)"],
-                "Support (10d)": f
+            table_data.append(
+                {
+                    "Ticker": ticker,
+                    "Koers ($)": f"${res['Koers']:.2f}",
+                    "AI Score": res["AI Score"],
+                    "Sentiment": res["Sentiment"],
+                    "Short-Term Rating": res["Short-Term Rating"],
+                    "Mid-Term Rating": res["Mid-Term Rating"],
+                    "RSI (14)": res["RSI (14)"],
+                    "Support (10d)": f"${res['Support (10d)']:.2f} ({res['Support %']}%)",
+                    "Resistance (10d)": f"${res['Resistance (10d)']:.2f} (+{res['Resistance %']}%)",
+                }
+            )
+
+        df_summary = pd.DataFrame(table_data).sort_values(
+            by="AI Score", ascending=False
+        )
+
+        # Highlight Metrics
+        col1, col2, col3 = st.columns(3)
+        top_stock = df_summary.iloc[0]
+        col1.metric(
+            "⭐ Hoogste AI Score",
+            top_stock["Ticker"],
+            f"{top_stock['AI Score']}/100",
+        )
+        col2.metric("📊 Totaal Gescand", len(df_summary))
+        col3.metric(
+            "🟢 Bullish Aandelen",
+            len(
+                df_summary[df_summary["Sentiment"].str.contains("Bullish")]
+            ),
+        )
+
+        st.markdown("### 📋 Quant Ensemble Overzicht")
+        st.dataframe(
+            df_summary,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "AI Score": st.column_config.ProgressColumn(
+                    "AI Score",
+                    help="Quant Ensemble AI Score (0-100)",
+                    format="%f",
+                    min_value=0,
+                    max_value=100,
+                ),
+            },
+        )
+
+        st.markdown("---")
+        st.markdown("### 📈 Detail Analyse & Grafiek per USA Aandeel")
+
+        selected_ticker = st.selectbox(
+            "Kies een aandeel om de grafiek te bekijken:",
+            list(scan_results.keys()),
+        )
+
+        if selected_ticker:
+            stock = scan_results[selected_ticker]
+            df_chart = stock["df"]
+
+            # Plotly Interactieve Grafiek
+            fig = go.Figure()
+
+            # Candlestick
+            fig.add_trace(
+                go.Candlestick(
+                    x=df_chart.index,
+                    open=df_chart["Open"],
+                    high=df_chart["High"],
+                    low=df_chart["Low"],
+                    close=df_chart["Close"],
+                    name="Koers",
+                )
+            )
+
+            # Moving Averages
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma5"],
+                    mode="lines",
+                    name="SMA 5",
+                    line=dict(color="orange", width=1),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma20"],
+                    mode="lines",
+                    name="SMA 20",
+                    line=dict(color="blue", width=1.5),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma50"],
+                    mode="lines",
+                    name="SMA 50",
+                    line=dict(color="purple", width=1.5),
+                )
+            )
+
+            # Support & Resistance
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["support10"],
+                    mode="lines",
+                    name="Support 10d",
+                    line=dict(color="red", dash="dash"),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["resistance10"],
+                    mode="lines",
+                    name="Resistance 10d",
+                    line=dict(color="green", dash="dash"),
+                )
+            )
+
+            fig.update_layout(
+                title=f"{selected_ticker} (US) - Technische Grafiek & Support/Resistance",
+                xaxis_title="Datum",
+                yaxis_title="Prijs ($)",
+                xaxis_rangeslider_visible=False,
+                template="plotly_dark",
+                height=500,
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.warning("Geen data gevonden voor de opgegeven USA tickers.")
+else:
+    st.info("Voer minimaal één ticker in in de sidebar om te scannen.")
