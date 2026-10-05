@@ -1,6 +1,6 @@
 from datetime import datetime
+import numpy as np
 import pandas as pd
-import pandas_ta as ta
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
@@ -16,40 +16,60 @@ st.set_page_config(
 
 
 # ==========================================
-# REKENFUNCTIE (STOXLINE & QUANT ENSEMBLE)
+# REKENFUNCTIE (PURE PANDAS - GEEN PANDAS-TA)
 # ==========================================
 def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
     if len(df) < 50:
         return None
 
-    close = df["Close"]
-    low = df["Low"]
-    high = df["High"]
+    # Zorg dat de kolommen eenduidig als Series worden ingelezen
+    close = (
+        df["Close"].squeeze()
+        if isinstance(df["Close"], pd.DataFrame)
+        else df["Close"]
+    )
+    low = (
+        df["Low"].squeeze() if isinstance(df["Low"], pd.DataFrame) else df["Low"]
+    )
+    high = (
+        df["High"].squeeze()
+        if isinstance(df["High"], pd.DataFrame)
+        else df["High"]
+    )
 
-    # Indicatoren
-    sma5 = ta.sma(close, length=5)
-    sma20 = ta.sma(close, length=20)
-    sma50 = ta.sma(close, length=50)
-    rsi_series = ta.rsi(close, length=14)
+    # 1. Moving Averages
+    sma5 = close.rolling(window=5).mean()
+    sma20 = close.rolling(window=20).mean()
+    sma50 = close.rolling(window=50).mean()
 
-    macd_df = ta.macd(close, fast=12, slow=26, signal=9)
-    macd_line = macd_df["MACD_12_26_9"]
-    signal_line = macd_df["MACDs_12_26_9"]
+    # 2. RSI Berekening (14 periodes)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi_series = 100 - (100 / (1 + rs))
 
+    # 3. MACD Berekening (12, 26, 9)
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+
+    # 4. Support & Resistance (10-daags Lookback)
     support10 = low.rolling(window=10).min()
     resistance10 = high.rolling(window=10).max()
 
-    # Laatste geldige waarden
-    c_last = close.iloc[-1]
-    sma5_last = sma5.iloc[-1]
-    sma5_prev = sma5.iloc[-2]
-    sma20_last = sma20.iloc[-1]
-    sma50_last = sma50.iloc[-1]
-    rsi_last = rsi_series.iloc[-1]
-    macd_last = macd_line.iloc[-1]
-    sig_last = signal_line.iloc[-1]
-    sup10_last = support10.iloc[-1]
-    res10_last = resistance10.iloc[-1]
+    # Laatste geldige waarden ophalen
+    c_last = float(close.iloc[-1])
+    sma5_last = float(sma5.iloc[-1])
+    sma5_prev = float(sma5.iloc[-2])
+    sma20_last = float(sma20.iloc[-1])
+    sma50_last = float(sma50.iloc[-1])
+    rsi_last = float(rsi_series.iloc[-1])
+    macd_last = float(macd_line.iloc[-1])
+    sig_last = float(signal_line.iloc[-1])
+    sup10_last = float(support10.iloc[-1])
+    res10_last = float(resistance10.iloc[-1])
 
     # Percentage afwijking berekenen
     sup_pct = ((sup10_last - c_last) / c_last) * 100
@@ -117,7 +137,7 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 
 @st.cache_data(ttl=300)
 def fetch_and_scan(tickers: list):
-    """Data ophalen met Streamlit caching (5 minuten)."""
+    """Data ophalen via yfinance met caching (5 minuten)."""
     results = {}
     data = yf.download(
         tickers, period="6m", interval="1d", group_by="ticker", progress=False
@@ -134,13 +154,13 @@ def fetch_and_scan(tickers: list):
             if res:
                 results[ticker] = res
         except Exception as e:
-            st.error(f"Fout bij ophalen {ticker}: {e}")
+            st.error(f"Fout bij verwerken van ticker '{ticker}': {e}")
 
     return results
 
 
 # ==========================================
-# SIDEBAR
+# SIDEBAR / INSTELINGEN
 # ==========================================
 st.sidebar.title("🔍 Scanner Instellingen")
 default_tickers = "ASML.AS, NVDA, TSLA, AAPL, MSFT, AMZN, META"
@@ -175,7 +195,7 @@ if tickers:
         scan_results = fetch_and_scan(tickers)
 
     if scan_results:
-        # Tabeloverzicht maken
+        # Overzichtstabel opbouwen
         table_data = []
         for ticker, res in scan_results.items():
             table_data.append({
@@ -194,12 +214,21 @@ if tickers:
             by="AI Score", ascending=False
         )
 
-        # Top Statistieken Metric Cards
+        # Highlight Metrics
         col1, col2, col3 = st.columns(3)
         top_stock = df_summary.iloc[0]
-        col1.metric("⭐ Highest AI Score", top_stock["Ticker"], f"{top_stock['AI Score']}/100")
+        col1.metric(
+            "⭐ Highest AI Score",
+            top_stock["Ticker"],
+            f"{top_stock['AI Score']}/100",
+        )
         col2.metric("📊 Totaal Gescand", len(df_summary))
-        col3.metric("🟢 Bullish Aandelen", len(df_summary[df_summary["Sentiment"].str.contains("Bullish")]))
+        col3.metric(
+            "🟢 Bullish Aandelen",
+            len(
+                df_summary[df_summary["Sentiment"].str.contains("Bullish")]
+            ),
+        )
 
         st.markdown("### 📋 Quant Ensemble Overzicht")
         st.dataframe(
@@ -220,33 +249,78 @@ if tickers:
         st.markdown("---")
         st.markdown("### 📈 Detail Analyse & Grafiek per Aandeel")
 
-        selected_ticker = st.selectbox("Kies een aandeel om de grafiek te bekijken:", list(scan_results.keys()))
+        selected_ticker = st.selectbox(
+            "Kies een aandeel om de grafiek te bekijken:",
+            list(scan_results.keys()),
+        )
 
         if selected_ticker:
             stock = scan_results[selected_ticker]
             df_chart = stock["df"]
 
-            # Plotly Kandelaar + Moving Averages Grafiek
+            # Plotly Interactieve Grafiek
             fig = go.Figure()
 
             # Candlestick
-            fig.add_trace(go.Candlestick(
-                x=df_chart.index,
-                open=df_chart["Open"],
-                high=df_chart["High"],
-                low=df_chart["Low"],
-                close=df_chart["Close"],
-                name="Koers"
-            ))
+            fig.add_trace(
+                go.Candlestick(
+                    x=df_chart.index,
+                    open=df_chart["Open"],
+                    high=df_chart["High"],
+                    low=df_chart["Low"],
+                    close=df_chart["Close"],
+                    name="Koers",
+                )
+            )
 
             # Moving Averages
-            fig.add_trace(go.Scatter(x=df_chart.index, y=stock["sma5"], mode="lines", name="SMA 5", line=dict(color="orange", width=1)))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=stock["sma20"], mode="lines", name="SMA 20", line=dict(color="blue", width=1.5)))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=stock["sma50"], mode="lines", name="SMA 50", line=dict(color="purple", width=1.5)))
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma5"],
+                    mode="lines",
+                    name="SMA 5",
+                    line=dict(color="orange", width=1),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma20"],
+                    mode="lines",
+                    name="SMA 20",
+                    line=dict(color="blue", width=1.5),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["sma50"],
+                    mode="lines",
+                    name="SMA 50",
+                    line=dict(color="purple", width=1.5),
+                )
+            )
 
             # Support & Resistance
-            fig.add_trace(go.Scatter(x=df_chart.index, y=stock["support10"], mode="lines", name="Support 10d", line=dict(color="red", dash="dash")))
-            fig.add_trace(go.Scatter(x=df_chart.index, y=stock["resistance10"], mode="lines", name="Resistance 10d", line=dict(color="green", dash="dash")))
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["support10"],
+                    mode="lines",
+                    name="Support 10d",
+                    line=dict(color="red", dash="dash"),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df_chart.index,
+                    y=stock["resistance10"],
+                    mode="lines",
+                    name="Resistance 10d",
+                    line=dict(color="green", dash="dash"),
+                )
+            )
 
             fig.update_layout(
                 title=f"{selected_ticker} - Technische Grafiek & Support/Resistance",
@@ -254,7 +328,7 @@ if tickers:
                 yaxis_title="Prijs",
                 xaxis_rangeslider_visible=False,
                 template="plotly_dark",
-                height=500
+                height=500,
             )
 
             st.plotly_chart(fig, use_container_width=True)
