@@ -109,4 +109,138 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
     mt_score_100 = (mt_points / 5.0) * 100
     ensemble_score = round((st_score_100 + mt_score_100) / 2, 1)
 
-    if ensemble_score >=
+    if ensemble_score >= 60:
+        sentiment = "Bullish 🟢"
+    elif ensemble_score <= 40:
+        sentiment = "Bearish 🔴"
+    else:
+        sentiment = "Neutral 🟡"
+
+    chart_df = pd.DataFrame({
+        "Open": df["Open"],
+        "High": high,
+        "Low": low,
+        "Close": close
+    }).dropna()
+
+    return {
+        "Koers": round(c_last, 2),
+        "AI Score": ensemble_score,
+        "Sentiment": sentiment,
+        "Short-Term Rating": f"{'★' * st_stars}{'☆' * (5 - st_stars)} ({st_stars}/5)",
+        "Mid-Term Rating": f"{'★' * mt_stars}{'☆' * (5 - mt_stars)} ({mt_stars}/5)",
+        "RSI (14)": round(rsi_last, 1),
+        "Support (10d)": round(sup10_last, 2),
+        "Support %": round(sup_pct, 1),
+        "Resistance (10d)": round(res10_last, 2),
+        "Resistance %": round(res_pct, 1),
+        "df": chart_df,
+        "sma5": sma5,
+        "sma20": sma20,
+        "sma50": sma50,
+        "support10": support10,
+        "resistance10": resistance10,
+    }
+
+
+@st.cache_data(ttl=300)
+def fetch_single_ticker(ticker: str):
+    """Haalt betrouwbaar data op per losse ticker met yfinance."""
+    try:
+        t_obj = yf.Ticker(ticker)
+        df = t_obj.history(period="6m")
+        if df is not None and not df.empty and len(df) >= 10:
+            return calculate_stoxline_and_ensemble(df)
+    except Exception:
+        pass
+    return None
+
+
+def fetch_all_tickers(tickers: list):
+    results = {}
+    for t in tickers:
+        res = fetch_single_ticker(t)
+        if res:
+            results[t] = res
+    return results
+
+
+# ==========================================
+# SIDEBAR - INVOER & INSTELLINGEN
+# ==========================================
+st.sidebar.title("⚙️ Instellingen & Tickers")
+
+selected_preset = st.sidebar.selectbox(
+    "Snelkiezer (Presets):",
+    list(USA_PRESETS.keys())
+)
+
+preset_tickers = USA_PRESETS[selected_preset]
+
+# VAK OM ZELFTICKERS IN TE VOEREN
+sidebar_input = st.sidebar.text_area(
+    "Voer hier je USA Tickers in (gescheiden door komma's):",
+    value=preset_tickers if preset_tickers else "NVDA, AAPL, MSFT, AMZN, GOOGL, TSLA, PLTR",
+    height=140,
+    help="Bijvoorbeeld: AAPL, NVDA, TSLA, AMD, PLTR, MSFT"
+)
+
+if st.sidebar.button("🔄 Cache Wissen / Herladen"):
+    st.cache_data.clear()
+
+# ==========================================
+# HOOFDSCHERM - INVOER & DISPLAY
+# ==========================================
+st.title("📊 USA Stocks - Live AI & Quant Scanner")
+st.caption("Voer handmatig USA tickers in om een live analyse en AI-score op te vragen.")
+
+# VAK OP HET HOOFDSCHERM
+col_input, col_btn = st.columns([4, 1])
+
+with col_input:
+    user_ticker_string = st.text_input(
+        "🔍 Vul je USA Tickers in:",
+        value=sidebar_input,
+        placeholder="bijv: NVDA, AAPL, TSLA, PLTR, AMD, MSFT"
+    )
+
+with col_btn:
+    st.write(" ")
+    st.write(" ")
+    scan_clicked = st.button("🚀 Scan Tickers", use_container_width=True)
+
+# Tickers verwerken uit invoervak
+parsed_tickers = [
+    t.strip().upper()
+    for t in user_ticker_string.replace(";", ",").split(",")
+    if t.strip() != ""
+]
+
+if parsed_tickers:
+    with st.spinner(f"Bezig met ophalen en analyseren van {len(parsed_tickers)} USA aandeel/aandelen..."):
+        scan_results = fetch_all_tickers(parsed_tickers)
+
+    if scan_results:
+        table_data = []
+        for ticker, res in scan_results.items():
+            table_data.append({
+                "Ticker": ticker,
+                "Koers ($)": f"${res['Koers']:.2f}",
+                "AI Score": res["AI Score"],
+                "Sentiment": res["Sentiment"],
+                "Short-Term Rating": res["Short-Term Rating"],
+                "Mid-Term Rating": res["Mid-Term Rating"],
+                "RSI (14)": res["RSI (14)"],
+                "Support (10d)": f"${res['Support (10d)']:.2f} ({res['Support %']}%)",
+                "Resistance (10d)": f"${res['Resistance (10d)']:.2f} (+{res['Resistance %']}%)",
+            })
+
+        df_summary = pd.DataFrame(table_data).sort_values(
+            by="AI Score", ascending=False
+        )
+
+        # Highlight Metrics
+        c1, c2, c3 = st.columns(3)
+        top_stock = df_summary.iloc[0]
+        c1.metric("⭐ Hoogste AI Score", top_stock["Ticker"], f"{top_stock['AI Score']}/100")
+        c2.metric("📊 Succesvol Gescand", f"{len
