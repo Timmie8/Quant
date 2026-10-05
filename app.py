@@ -9,11 +9,81 @@ import yfinance as yf
 # STREAMLIT PAGINA CONFIGURATIE
 # ==========================================
 st.set_page_config(
-    page_title="Stoxline & Quant Ensemble AI Scanner",
-    page_icon="📈",
+    page_title="USA Stocks - Stoxline & Quant Ensemble AI Scanner",
+    page_icon="🇺🇸",
     layout="wide",
 )
 
+# ==========================================
+# USA TICKERS LIJSTEN
+# ==========================================
+USA_PRESETS = {
+    "Magnificent 7 & Big Tech": [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "TSLA",
+    ],
+    "Semiconductors / AI Hardware": [
+        "NVDA",
+        "AMD",
+        "AVGO",
+        "INTC",
+        "QCOM",
+        "MU",
+        "ARM",
+        "SMCI",
+        "TSM",
+        "AMAT",
+        "LRCX",
+    ],
+    "NASDAQ 100 Leaders": [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "TSLA",
+        "AVGO",
+        "COST",
+        "PEP",
+        "CSCO",
+        "TMUS",
+        "NFLX",
+        "AMD",
+        "INTC",
+        "QCOM",
+        "AMAT",
+    ],
+    "Dow Jones Industrial Top 10": [
+        "UNH",
+        "GS",
+        "HD",
+        "MSFT",
+        "CAT",
+        "CRM",
+        "AMGN",
+        "V",
+        "MCD",
+        "BA",
+    ],
+    "Growth & Momentum USA": [
+        "PLTR",
+        "COIN",
+        "AMD",
+        "SHOP",
+        "SQ",
+        "SNOW",
+        "U",
+        "NET",
+        "PANW",
+        "CRWD",
+    ],
+}
 
 # ==========================================
 # REKENFUNCTIE (PURE PANDAS - GEEN PANDAS-TA)
@@ -139,6 +209,9 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 def fetch_and_scan(tickers: list):
     """Data ophalen via yfinance met caching (5 minuten)."""
     results = {}
+    if not tickers:
+        return results
+
     data = yf.download(
         tickers, period="6m", interval="1d", group_by="ticker", progress=False
     )
@@ -153,45 +226,66 @@ def fetch_and_scan(tickers: list):
             res = calculate_stoxline_and_ensemble(df)
             if res:
                 results[ticker] = res
-        except Exception as e:
-            st.error(f"Fout bij verwerken van ticker '{ticker}': {e}")
+        except Exception:
+            continue
 
     return results
 
 
 # ==========================================
-# SIDEBAR / INSTELINGEN
+# SIDEBAR / USA TICKER SELECTIE
 # ==========================================
-st.sidebar.title("🔍 Scanner Instellingen")
-default_tickers = "ASML.AS, NVDA, TSLA, AAPL, MSFT, AMZN, META"
+st.sidebar.title("🇺🇸 USA Stocks Scanner")
+
+# Preset selectie
+selected_preset = st.sidebar.selectbox(
+    "Kies een USA Categorie / Index:",
+    ["Aangepast / Handmatig"] + list(USA_PRESETS.keys()),
+)
+
+# Knoppen voor snel laden
+col_btn1, col_btn2 = st.sidebar.columns(2)
+load_all_usa = col_btn1.button("🌐 Scan Alle USA")
+reset_btn = col_btn2.button("🔄 Herlaad")
+
+if reset_btn:
+    st.cache_data.clear()
+
+# Tickerlijst samenstellen
+if load_all_usa:
+    all_usa_tickers = sorted(
+        list(set([t for sub in USA_PRESETS.values() for t in sub]))
+    )
+    default_text = ", ".join(all_usa_tickers)
+elif selected_preset != "Aangepast / Handmatig":
+    default_text = ", ".join(USA_PRESETS[selected_preset])
+else:
+    default_text = "NVDA, AAPL, MSFT, AMZN, GOOGL, META, TSLA, AMD, PLTR"
+
 user_input = st.sidebar.text_area(
-    "Vul tickers in (gescheiden door komma's):", default_tickers, height=100
+    "USA Tickers (gescheiden door komma's):", default_text, height=120
 )
 
 tickers = [
     t.strip().upper() for t in user_input.split(",") if t.strip() != ""
 ]
 
-refresh_btn = st.sidebar.button("🔄 Herlaad Data", use_container_width=True)
-if refresh_btn:
-    st.cache_data.clear()
-
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "**Logica:**\n"
-    "- Short-Term (SMA5, RSI, MACD Cross)\n"
-    "- Mid-Term (SMA20, SMA50, MACD > 0)\n"
-    "- AI Ensemble Score = Gemiddelde gewogen %"
+    "**Quant Ensemble Logica:**\n"
+    "- **Short-Term (50%):** SMA5, RSI (14), MACD Cross\n"
+    "- **Mid-Term (50%):** SMA20, SMA50, MACD Trend\n"
+    "- **AI Score:** 0 tot 100 punten"
 )
 
 # ==========================================
 # HOOFDSCHERM
 # ==========================================
-st.title("📊 Stoxline & Quant Ensemble AI Dashboard")
+st.title("📊 USA Stocks - Stoxline & Quant Ensemble AI Scanner")
 st.caption(f"Laatst bijgewerkt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if tickers:
-    with st.spinner("Live koersen & indicatoren ophalen..."):
+    with st.spinner(f"Live data ophalen voor {len(tickers)} USA aandelen..."):
         scan_results = fetch_and_scan(tickers)
 
     if scan_results:
@@ -200,140 +294,10 @@ if tickers:
         for ticker, res in scan_results.items():
             table_data.append({
                 "Ticker": ticker,
-                "Koers ($/€)": res["Koers"],
+                "Koers ($)": f"${res['Koers']:.2f}",
                 "AI Score": res["AI Score"],
                 "Sentiment": res["Sentiment"],
                 "Short-Term Rating": res["Short-Term Rating"],
                 "Mid-Term Rating": res["Mid-Term Rating"],
                 "RSI (14)": res["RSI (14)"],
-                "Support (10d)": f"{res['Support (10d)']} ({res['Support %']}%)",
-                "Resistance (10d)": f"{res['Resistance (10d)']} (+{res['Resistance %']}%)",
-            })
-
-        df_summary = pd.DataFrame(table_data).sort_values(
-            by="AI Score", ascending=False
-        )
-
-        # Highlight Metrics
-        col1, col2, col3 = st.columns(3)
-        top_stock = df_summary.iloc[0]
-        col1.metric(
-            "⭐ Highest AI Score",
-            top_stock["Ticker"],
-            f"{top_stock['AI Score']}/100",
-        )
-        col2.metric("📊 Totaal Gescand", len(df_summary))
-        col3.metric(
-            "🟢 Bullish Aandelen",
-            len(
-                df_summary[df_summary["Sentiment"].str.contains("Bullish")]
-            ),
-        )
-
-        st.markdown("### 📋 Quant Ensemble Overzicht")
-        st.dataframe(
-            df_summary,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "AI Score": st.column_config.ProgressColumn(
-                    "AI Score",
-                    help="Quant Ensemble AI Score (0-100)",
-                    format="%f",
-                    min_value=0,
-                    max_value=100,
-                ),
-            },
-        )
-
-        st.markdown("---")
-        st.markdown("### 📈 Detail Analyse & Grafiek per Aandeel")
-
-        selected_ticker = st.selectbox(
-            "Kies een aandeel om de grafiek te bekijken:",
-            list(scan_results.keys()),
-        )
-
-        if selected_ticker:
-            stock = scan_results[selected_ticker]
-            df_chart = stock["df"]
-
-            # Plotly Interactieve Grafiek
-            fig = go.Figure()
-
-            # Candlestick
-            fig.add_trace(
-                go.Candlestick(
-                    x=df_chart.index,
-                    open=df_chart["Open"],
-                    high=df_chart["High"],
-                    low=df_chart["Low"],
-                    close=df_chart["Close"],
-                    name="Koers",
-                )
-            )
-
-            # Moving Averages
-            fig.add_trace(
-                go.Scatter(
-                    x=df_chart.index,
-                    y=stock["sma5"],
-                    mode="lines",
-                    name="SMA 5",
-                    line=dict(color="orange", width=1),
-                )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=df_chart.index,
-                    y=stock["sma20"],
-                    mode="lines",
-                    name="SMA 20",
-                    line=dict(color="blue", width=1.5),
-                )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=df_chart.index,
-                    y=stock["sma50"],
-                    mode="lines",
-                    name="SMA 50",
-                    line=dict(color="purple", width=1.5),
-                )
-            )
-
-            # Support & Resistance
-            fig.add_trace(
-                go.Scatter(
-                    x=df_chart.index,
-                    y=stock["support10"],
-                    mode="lines",
-                    name="Support 10d",
-                    line=dict(color="red", dash="dash"),
-                )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=df_chart.index,
-                    y=stock["resistance10"],
-                    mode="lines",
-                    name="Resistance 10d",
-                    line=dict(color="green", dash="dash"),
-                )
-            )
-
-            fig.update_layout(
-                title=f"{selected_ticker} - Technische Grafiek & Support/Resistance",
-                xaxis_title="Datum",
-                yaxis_title="Prijs",
-                xaxis_rangeslider_visible=False,
-                template="plotly_dark",
-                height=500,
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-    else:
-        st.warning("Geen data gevonden voor de opgegeven tickers.")
-else:
-    st.info("Voer minimaal één ticker in in de sidebar om te scannen.")
+                "Support (10d)": f
