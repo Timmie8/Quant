@@ -89,28 +89,29 @@ USA_PRESETS = {
 # REKENFUNCTIE (PURE PANDAS - GEEN PANDAS-TA)
 # ==========================================
 def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
-    if len(df) < 50:
+    if df is None or len(df) < 20:
         return None
 
-    # Zorg dat de kolommen eenduidig als Series worden ingelezen
-    close = (
-        df["Close"].squeeze()
-        if isinstance(df["Close"], pd.DataFrame)
-        else df["Close"]
-    )
-    low = (
-        df["Low"].squeeze() if isinstance(df["Low"], pd.DataFrame) else df["Low"]
-    )
-    high = (
-        df["High"].squeeze()
-        if isinstance(df["High"], pd.DataFrame)
-        else df["High"]
-    )
+    # Eenduidige Series extractor (omzeilt MultiIndex / DataFrame kolom-issues)
+    def extract_series(col_name):
+        if col_name in df.columns:
+            val = df[col_name]
+            if isinstance(val, pd.DataFrame):
+                val = val.iloc[:, 0]
+            return val.dropna()
+        return None
+
+    close = extract_series("Close")
+    low = extract_series("Low")
+    high = extract_series("High")
+
+    if close is None or low is None or high is None or len(close) < 20:
+        return None
 
     # 1. Moving Averages
     sma5 = close.rolling(window=5).mean()
     sma20 = close.rolling(window=20).mean()
-    sma50 = close.rolling(window=50).mean()
+    sma50 = close.rolling(window=min(50, len(close))).mean()
 
     # 2. RSI Berekening (14 periodes)
     delta = close.diff()
@@ -131,15 +132,15 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 
     # Laatste geldige waarden ophalen
     c_last = float(close.iloc[-1])
-    sma5_last = float(sma5.iloc[-1])
-    sma5_prev = float(sma5.iloc[-2])
-    sma20_last = float(sma20.iloc[-1])
-    sma50_last = float(sma50.iloc[-1])
-    rsi_last = float(rsi_series.iloc[-1])
-    macd_last = float(macd_line.iloc[-1])
-    sig_last = float(signal_line.iloc[-1])
-    sup10_last = float(support10.iloc[-1])
-    res10_last = float(resistance10.iloc[-1])
+    sma5_last = float(sma5.iloc[-1]) if not pd.isna(sma5.iloc[-1]) else c_last
+    sma5_prev = float(sma5.iloc[-2]) if len(sma5) > 1 and not pd.isna(sma5.iloc[-2]) else sma5_last
+    sma20_last = float(sma20.iloc[-1]) if not pd.isna(sma20.iloc[-1]) else c_last
+    sma50_last = float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else c_last
+    rsi_last = float(rsi_series.iloc[-1]) if not pd.isna(rsi_series.iloc[-1]) else 50.0
+    macd_last = float(macd_line.iloc[-1]) if not pd.isna(macd_line.iloc[-1]) else 0.0
+    sig_last = float(signal_line.iloc[-1]) if not pd.isna(signal_line.iloc[-1]) else 0.0
+    sup10_last = float(support10.iloc[-1]) if not pd.isna(support10.iloc[-1]) else c_last
+    res10_last = float(resistance10.iloc[-1]) if not pd.isna(resistance10.iloc[-1]) else c_last
 
     # Percentage afwijking berekenen
     sup_pct = ((sup10_last - c_last) / c_last) * 100
@@ -185,6 +186,14 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
     else:
         sentiment = "Neutral 🟡"
 
+    # Bouw opgeschoond DF voor Plotly grafiek
+    chart_df = pd.DataFrame({
+        "Open": extract_series("Open"),
+        "High": high,
+        "Low": low,
+        "Close": close
+    }).dropna()
+
     return {
         "Koers": round(c_last, 2),
         "AI Score": ensemble_score,
@@ -196,7 +205,7 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
         "Support %": round(sup_pct, 1),
         "Resistance (10d)": round(res10_last, 2),
         "Resistance %": round(res_pct, 1),
-        "df": df,
+        "df": chart_df,
         "sma5": sma5,
         "sma20": sma20,
         "sma50": sma50,
@@ -207,25 +216,44 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 
 @st.cache_data(ttl=300)
 def fetch_and_scan(tickers: list):
-    """Data ophalen via yfinance met caching (5 minuten)."""
+    """Data ophalen via yfinance met caching en MultiIndex afhandeling."""
     results = {}
     if not tickers:
         return results
 
-    data = yf.download(
-        tickers, period="6m", interval="1d", group_by="ticker", progress=False
-    )
+    try:
+        data = yf.download(
+            tickers,
+            period="6m",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            auto_adjust=True,
+        )
+    except Exception:
+        data = None
 
     for ticker in tickers:
+        df_ticker = None
         try:
-            if len(tickers) == 1:
-                df = data.copy()
-            else:
-                df = data[ticker].dropna()
+            if data is not None and not data.empty:
+                if isinstance(data.columns, pd.MultiIndex):
+                    if ticker in data.columns.levels[0]:
+                        df_ticker = data[ticker].dropna(how="all")
+                    elif ticker in data.columns.levels[1]:
+                        df_ticker = data.xs(ticker, level=1, axis=1).dropna(how="all")
+                else:
+                    df_ticker = data.dropna(how="all")
 
-            res = calculate_stoxline_and_ensemble(df)
-            if res:
-                results[ticker] = res
+            # Fallback direct via Ticker.history als bulk download geen resultaat gaf
+            if df_ticker is None or df_ticker.empty or len(df_ticker) < 10:
+                t_obj = yf.Ticker(ticker)
+                df_ticker = t_obj.history(period="6m")
+
+            if df_ticker is not None and not df_ticker.empty:
+                res = calculate_stoxline_and_ensemble(df_ticker)
+                if res:
+                    results[ticker] = res
         except Exception:
             continue
 
@@ -285,7 +313,7 @@ st.title("📊 USA Stocks - Stoxline & Quant Ensemble AI Scanner")
 st.caption(f"Laatst bijgewerkt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if tickers:
-    with st.spinner(f"Live data ophalen voor {len(tickers)} USA aandelen..."):
+    with st.spinner(f"Live data ophalen via yfinance voor {len(tickers)} USA aandelen..."):
         scan_results = fetch_and_scan(tickers)
 
     if scan_results:
@@ -335,7 +363,7 @@ if tickers:
                 "AI Score": st.column_config.ProgressColumn(
                     "AI Score",
                     help="Quant Ensemble AI Score (0-100)",
-                    format="%f",
+                    format="%.1f",
                     min_value=0,
                     max_value=100,
                 ),
@@ -430,6 +458,6 @@ if tickers:
             st.plotly_chart(fig, use_container_width=True)
 
     else:
-        st.warning("Geen data gevonden voor de opgegeven USA tickers.")
+        st.warning("Geen data gevonden voor de opgegeven USA tickers. Controleer je internetverbinding of voer geldige USA tickers in.")
 else:
     st.info("Voer minimaal één ticker in in de sidebar om te scannen.")
