@@ -29,15 +29,23 @@ USA_PRESETS = {
 # REKENFUNCTIE (QUANT ENSEMBLE AI SCORE)
 # ==========================================
 def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
-    if df is None or len(df) < 15:
+    if df is None or df.empty:
         return None
 
-    # Zorg voor zuivere Series
+    # Indien MultiIndex op kolommen, flatten deze naar enkel niveau
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # Controleer vereiste kolommen
+    if "Close" not in df.columns:
+        return None
+
+    # Zorg voor schone Series
     close = df["Close"].dropna()
     low = df["Low"].dropna() if "Low" in df.columns else close
     high = df["High"].dropna() if "High" in df.columns else close
 
-    if len(close) < 15:
+    if len(close) < 10:
         return None
 
     # 1. Moving Averages
@@ -47,8 +55,8 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 
     # 2. RSI (14 periodes)
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=min(14, len(close))).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=min(14, len(close))).mean()
     rs = gain / (loss + 1e-9)
     rsi_series = 100 - (100 / (1 + rs))
 
@@ -116,8 +124,9 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
     else:
         sentiment = "Neutral 🟡"
 
+    open_series = df["Open"] if "Open" in df.columns else close
     chart_df = pd.DataFrame({
-        "Open": df["Open"],
+        "Open": open_series,
         "High": high,
         "Low": low,
         "Close": close
@@ -145,14 +154,29 @@ def calculate_stoxline_and_ensemble(df: pd.DataFrame) -> dict:
 
 @st.cache_data(ttl=300)
 def fetch_single_ticker(ticker: str):
-    """Haalt betrouwbaar data op per losse ticker met yfinance."""
+    """Haalt betrouwbaar data op per losse ticker met yfinance en valt terug op download indien nodig."""
+    clean_ticker = ticker.strip().upper()
+    if not clean_ticker:
+        return None
+
+    df = None
     try:
-        t_obj = yf.Ticker(ticker)
+        # Methode 1: Ticker.history()
+        t_obj = yf.Ticker(clean_ticker)
         df = t_obj.history(period="6m")
-        if df is not None and not df.empty and len(df) >= 10:
-            return calculate_stoxline_and_ensemble(df)
     except Exception:
-        pass
+        df = None
+
+    # Methode 2: Fallback via yf.download() als history leeg/foutief is
+    if df is None or df.empty:
+        try:
+            df = yf.download(clean_ticker, period="6m", progress=False, auto_adjust=True)
+        except Exception:
+            df = None
+
+    if df is not None and not df.empty:
+        return calculate_stoxline_and_ensemble(df)
+
     return None
 
 
@@ -239,7 +263,7 @@ if parsed_tickers:
             by="AI Score", ascending=False
         )
 
-        # Highlight Metrics (Hier zat de syntaxfout in regel 246)
+        # Highlight Metrics
         c1, c2, c3 = st.columns(3)
         top_stock = df_summary.iloc[0]
         c1.metric("⭐ Hoogste AI Score", top_stock["Ticker"], f"{top_stock['AI Score']}/100")
